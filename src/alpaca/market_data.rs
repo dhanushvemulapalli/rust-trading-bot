@@ -1,4 +1,4 @@
-﻿//! Alpaca market-data WebSocket collector.
+//! Alpaca market-data WebSocket collector.
 //!
 //! Connects to the Alpaca market-data stream, authenticates,
 //! subscribes to bars for a set of symbols, and forwards
@@ -79,76 +79,109 @@ pub async fn run_collector(
     symbols: Vec<String>,
     tx: mpsc::Sender<Bar>,
 ) -> Result<()> {
-    info!("Connecting to market-data WebSocket: {}", config.data_ws_url);
-    let url = url::Url::parse(&config.data_ws_url)?;
-    let (ws, _) = connect_async(url).await?;
-    let (mut write, mut read) = ws.split();
+    let mut backoff_secs = 1;
+    loop {
+        if tx.is_closed() {
+            info!("Bar receiver dropped — shutting down collector");
+            return Ok(());
+        }
 
-    // Authenticate
-    let auth = serde_json::to_string(&AuthMsg {
-        action: "auth",
-        key: config.api_key.clone(),
-        secret: config.api_secret.clone(),
-    })?;
-    write.send(Message::Text(auth)).await?;
+        info!("Connecting to market-data WebSocket: {}", config.data_ws_url);
+        let url = match url::Url::parse(&config.data_ws_url) {
+            Ok(u) => u,
+            Err(e) => {
+                error!("Invalid market data WS URL: {}", e);
+                return Err(e.into());
+            }
+        };
 
-    // Subscribe to bars
-    let sub = serde_json::to_string(&SubscribeMsg {
-        action: "subscribe",
-        bars: symbols.clone(),
-    })?;
-    write.send(Message::Text(sub)).await?;
-    info!("Subscribed to bars for: {:?}", symbols);
+        match connect_async(url).await {
+            Ok((ws, _)) => {
+                backoff_secs = 1;
+                let (mut write, mut read) = ws.split();
 
-    // Read loop
-    while let Some(msg_result) = read.next().await {
-        match msg_result {
-            Ok(Message::Text(text)) => {
-                debug!("WS recv: {}", text);
-                match serde_json::from_str::<WsMsg>(&text) {
-                    Ok(WsMsg::Array(events)) => {
-                        for event in events {
-                            match event {
-                                WsEvent::Success { msg } => info!("WS auth/sub: {}", msg),
-                                WsEvent::Error { code, msg } => {
-                                    error!("WS error {}: {}", code, msg);
-                                    bail!("WebSocket error {}: {}", code, msg);
-                                }
-                                WsEvent::Bar(ws_bar) => {
-                                    let bar = convert_bar(ws_bar);
-                                    if tx.send(bar).await.is_err() {
-                                        info!("Bar receiver dropped — shutting down collector");
-                                        return Ok(());
+                // Authenticate
+                let auth = serde_json::to_string(&AuthMsg {
+                    action: "auth",
+                    key: config.api_key.clone(),
+                    secret: config.api_secret.clone(),
+                })?;
+                if let Err(e) = write.send(Message::Text(auth)).await {
+                    warn!("Failed to send auth msg: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+
+                // Subscribe to bars
+                let sub = serde_json::to_string(&SubscribeMsg {
+                    action: "subscribe",
+                    bars: symbols.clone(),
+                })?;
+                if let Err(e) = write.send(Message::Text(sub)).await {
+                    warn!("Failed to send subscribe msg: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+                info!("Subscribed to bars for: {:?}", symbols);
+
+                // Read loop
+                while let Some(msg_result) = read.next().await {
+                    match msg_result {
+                        Ok(Message::Text(text)) => {
+                            debug!("WS recv: {}", text);
+                            match serde_json::from_str::<WsMsg>(&text) {
+                                Ok(WsMsg::Array(events)) => {
+                                    for event in events {
+                                        match event {
+                                            WsEvent::Success { msg } => info!("WS auth/sub: {}", msg),
+                                            WsEvent::Error { code, msg } => {
+                                                error!("WS error {}: {}", code, msg);
+                                                if code == 402 || code == 401 {
+                                                    bail!("WebSocket auth failure {}: {}", code, msg);
+                                                }
+                                            }
+                                            WsEvent::Bar(ws_bar) => {
+                                                let bar = convert_bar(ws_bar);
+                                                if tx.send(bar).await.is_err() {
+                                                    info!("Bar receiver dropped — shutting down collector");
+                                                    return Ok(());
+                                                }
+                                            }
+                                            WsEvent::Subscription => {
+                                                info!("Subscription confirmed");
+                                            }
+                                            WsEvent::Unknown => {
+                                                warn!("Received unknown WS event: {}", text);
+                                            }
+                                        }
                                     }
                                 }
-                                WsEvent::Subscription => {
-                                    info!("Subscription confirmed");
-                                }
-                                WsEvent::Unknown => {
-                                    warn!("Received unknown WS event: {}", text);
-                                }
+                                Err(e) => warn!("Failed to parse WS message: {} — raw: {}", e, text),
                             }
                         }
+                        Ok(Message::Ping(p)) => {
+                            let _ = write.send(Message::Pong(p)).await;
+                        }
+                        Ok(Message::Close(_)) => {
+                            warn!("WebSocket closed by server, reconnecting...");
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("WebSocket read error: {}, will reconnect...", e);
+                            break;
+                        }
                     }
-                    Err(e) => warn!("Failed to parse WS message: {} — raw: {}", e, text),
                 }
             }
-            Ok(Message::Ping(p)) => {
-                write.send(Message::Pong(p)).await?;
-            }
-            Ok(Message::Close(_)) => {
-                info!("WebSocket closed by server");
-                break;
-            }
-            Ok(_) => {}
             Err(e) => {
-                error!("WebSocket read error: {}", e);
-                bail!("WebSocket read error: {}", e);
+                warn!("WebSocket connect failed: {}. Retrying in {}s...", e, backoff_secs);
             }
         }
-    }
 
-    Ok(())
+        tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
+        backoff_secs = (backoff_secs * 2).min(30);
+    }
 }
 
 fn convert_bar(ws: WsBar) -> Bar {

@@ -1,4 +1,4 @@
-﻿//! Application configuration loaded from environment variables.
+//! Application configuration loaded from environment variables.
 
 use anyhow::{Context, Result};
 use dotenvy::dotenv;
@@ -33,6 +33,8 @@ impl Config {
             .context("ALPACA_SECRET must be set in environment or .env")?;
         let base_url = std::env::var("ALPACA_BASE_URL")
             .unwrap_or_else(|_| "https://paper-api.alpaca.markets".into());
+        let base_url = base_url.trim_end_matches('/');
+        let base_url = base_url.strip_suffix("/v2").unwrap_or(base_url).to_string();
         let data_ws_url = std::env::var("ALPACA_DATA_WS")
             .unwrap_or_else(|_| "wss://stream.data.alpaca.markets/v2/iex".into());
         let trading_ws_url = std::env::var("ALPACA_TRADING_WS")

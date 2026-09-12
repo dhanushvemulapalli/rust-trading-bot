@@ -1,4 +1,4 @@
-﻿# Trading Bot
+# Trading Bot
 
 A Rust-based algorithmic trading bot that connects to Alpaca Paper Trading.
 
@@ -112,7 +112,7 @@ Current limits (all configurable via `RiskConfig`):
 - [x] Milestone 4 – EMA strategy
 - [x] Milestone 5 – Risk manager
 - [x] Milestone 6 – Paper order submission
-- [ ] Milestone 7 – Full persistence (positions, P&L)
-- [ ] Milestone 8 – Backtesting engine
+- [x] Milestone 7 – Full persistence (positions, orders, signals, bars)
+- [x] Milestone 8 – Backtesting engine (`cargo run --example run_backtest`)
 - [ ] Milestone 9 – Monitoring / metrics
 - [ ] Milestone 10 – Docker + VPS deployment

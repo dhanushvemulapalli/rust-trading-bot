@@ -1,9 +1,10 @@
-﻿//! Strategy module — strategy trait and concrete implementations.
+//! Strategy module — strategy trait and concrete implementations.
 //!
 //! A strategy must not know about Alpaca, order submission, or risk management.
 //! It only converts market data into signals.
 
 pub mod ema_crossover;
+pub mod ema_rsi;
 
 use crate::market::types::Bar;
 

@@ -1,4 +1,4 @@
-﻿//! Integration tests for the full bot pipeline using mocked/simulated data.
+//! Integration tests for the full bot pipeline using mocked/simulated data.
 //! These tests do not connect to Alpaca.
 
 use trading_bot::market::indicators::{ema, sma};
@@ -63,8 +63,10 @@ fn strategy_hold_before_enough_data() {
 #[test]
 fn risk_manager_approves_valid_buy() {
     let rm = RiskManager::new(RiskConfig::default());
-    let result = rm.evaluate("AAPL", Signal::Buy, &[]);
+    let result = rm.evaluate("AAPL", Signal::Buy, &[], 100_000.0, 150.0);
     assert!(result.is_ok());
+    // 70% of 100,000 / 5 slots = 14,000. 14,000 / 150 = 93.33 -> 93 shares
+    assert_eq!(result.unwrap().qty, 93.0);
 }
 
 #[test]
@@ -74,12 +76,12 @@ fn risk_manager_rejects_when_disabled() {
         ..Default::default()
     };
     let rm = RiskManager::new(config);
-    assert!(rm.evaluate("AAPL", Signal::Buy, &[]).is_err());
+    assert!(rm.evaluate("AAPL", Signal::Buy, &[], 100_000.0, 150.0).is_err());
 }
 
 #[test]
 fn risk_manager_rejects_on_loss_limit() {
     let mut rm = RiskManager::new(RiskConfig::default());
     rm.daily_realized_pl = -1000.0;
-    assert!(rm.evaluate("AAPL", Signal::Buy, &[]).is_err());
+    assert!(rm.evaluate("AAPL", Signal::Buy, &[], 100_000.0, 150.0).is_err());
 }

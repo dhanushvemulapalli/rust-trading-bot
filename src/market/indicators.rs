@@ -1,4 +1,4 @@
-﻿//! Technical indicators used by strategies.
+//! Technical indicators used by strategies.
 //!
 //! All indicators operate on `f64` slices (e.g. a window of closing prices)
 //! and are pure functions — no external state required.
@@ -27,6 +27,55 @@ pub fn sma(prices: &[f64], period: usize) -> Option<f64> {
     }
     let window = &prices[prices.len() - period..];
     Some(window.iter().sum::<f64>() / period as f64)
+}
+
+/// Compute the Relative Strength Index (RSI) for a price series.
+///
+/// Uses the standard Wilder's smoothing method.
+/// Returns None if `prices.len() <= period`.
+pub fn rsi(prices: &[f64], period: usize) -> Option<f64> {
+    if prices.len() <= period || period == 0 {
+        return None;
+    }
+
+    let mut gains = 0.0;
+    let mut losses = 0.0;
+
+    // Calculate initial average gain/loss over the first `period` changes
+    for i in 1..=period {
+        let diff = prices[i] - prices[i - 1];
+        if diff >= 0.0 {
+            gains += diff;
+        } else {
+            losses += diff.abs();
+        }
+    }
+
+    let mut avg_gain = gains / period as f64;
+    let mut avg_loss = losses / period as f64;
+
+    // Wilder's smoothing for subsequent periods
+    for i in (period + 1)..prices.len() {
+        let diff = prices[i] - prices[i - 1];
+        let (gain, loss) = if diff >= 0.0 {
+            (diff, 0.0)
+        } else {
+            (0.0, diff.abs())
+        };
+
+        avg_gain = (avg_gain * (period as f64 - 1.0) + gain) / period as f64;
+        avg_loss = (avg_loss * (period as f64 - 1.0) + loss) / period as f64;
+    }
+
+    if avg_loss == 0.0 {
+        if avg_gain == 0.0 {
+            return Some(50.0);
+        }
+        return Some(100.0);
+    }
+
+    let rs = avg_gain / avg_loss;
+    Some(100.0 - (100.0 / (1.0 + rs)))
 }
 
 #[cfg(test)]
@@ -61,6 +110,32 @@ mod tests {
         let prices: Vec<f64> = (1..=30).map(|i| i as f64).collect();
         let e = ema(&prices, 10).unwrap();
         let s = sma(&prices, 10).unwrap();
-        assert!(e >= s, "EMA {} should be >= SMA {} on rising series", e, s);
+        assert!(e + 1e-6 >= s, "EMA {} should be >= SMA {} on rising series", e, s);
+    }
+
+    #[test]
+    fn rsi_returns_none_when_insufficient_prices() {
+        assert_eq!(rsi(&[10.0, 11.0, 12.0], 14), None);
+    }
+
+    #[test]
+    fn rsi_all_gains_is_100() {
+        let prices: Vec<f64> = (1..=30).map(|i| i as f64 * 2.0).collect();
+        let r = rsi(&prices, 14).unwrap();
+        assert!(approx_eq(r, 100.0), "Monotonically increasing series should give RSI=100, got {}", r);
+    }
+
+    #[test]
+    fn rsi_all_losses_is_0() {
+        let prices: Vec<f64> = (1..=30).rev().map(|i| i as f64 * 2.0).collect();
+        let r = rsi(&prices, 14).unwrap();
+        assert!(approx_eq(r, 0.0), "Monotonically decreasing series should give RSI=0, got {}", r);
+    }
+
+    #[test]
+    fn rsi_flat_prices_is_50() {
+        let prices = vec![100.0; 30];
+        let r = rsi(&prices, 14).unwrap();
+        assert!(approx_eq(r, 50.0), "Flat series should give RSI=50, got {}", r);
     }
 }

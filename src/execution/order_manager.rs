@@ -3,7 +3,7 @@
 
 use crate::alpaca::{
     client::AlpacaClient,
-    orders::{AlpacaOrder, OrderRequest, OrderSide, OrderType, TimeInForce},
+    orders::{OrderRequest, OrderSide, OrderType, TimeInForce},
 };
 use crate::risk::manager::ApprovedOrder;
 use crate::strategy::Signal;
